@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Licht-/Bewegungsalarm</title>
+  <style>
+    body {
+      background: #000;
+      color: #0f0;
+      font-family: 'Courier New', monospace;
+      text-align: center;
+      padding: 20px;
+    }
+    video {
+      display: block;
+      width: 90%;
+      max-width: 720px;
+      margin: 20px auto;
+      border: 3px solid #0f0;
+      border-radius: 10px;
+    }
+    .status {
+      font-size: 1.6em;
+      margin-top: 20px;
+      font-weight: bold;
+    }
+    #startBtn {
+      font-size: 1.4em;
+      padding: 12px 24px;
+      background: #0f0;
+      color: #000;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      margin-top: 30px;
+      transition: background 0.3s;
+    }
+    #startBtn:hover {
+      background: #4f4;
+    }
+  </style>
+</head>
+<body>
+  <h1>🔦 Bewegungs- & Licht-Alarm</h1>
+  <button id="startBtn">▶️ Überwachung starten</button>
+  <p class="status">Bereit...</p>
+  <video autoplay playsinline></video>
+  <audio id="alarm" src="https://freesound.org/data/previews/316/316847_4939433-lq.mp3" preload="auto"></audio>
+
+  <script>
+    const video = document.querySelector('video');
+    const status = document.querySelector('.status');
+    const alarm = document.getElementById('alarm');
+    const startBtn = document.getElementById('startBtn');
+
+    let lastFrame = null;
+    let alarmPlaying = false;
+
+    startBtn.addEventListener('click', () => {
+      startBtn.style.display = 'none';
+      initCamera();
+    });
+
+    async function initCamera() {
+      try {
+        const constraints = {
+          video: {
+            facingMode: { exact: "environment" } // Rückkamera
+          }
+        };
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+        status.textContent = '🔍 Überwachung aktiv...';
+        detectChanges();
+      } catch (err) {
+        status.textContent = '❌ Kamera-Zugriff verweigert oder Rückkamera nicht verfügbar';
+        console.error(err);
+      }
+    }
+
+    function playAlarm() {
+      if (!alarmPlaying) {
+        alarm.volume = 1.0;
+        alarm.loop = true;
+        alarm.play();
+        status.textContent = '⚠️ ALARM! Bewegung oder Licht erkannt!';
+        alarmPlaying = true;
+      }
+    }
+
+    function detectChanges() {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+
+      setInterval(() => {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+        if (lastFrame) {
+          let diff = 0;
+          for (let i = 0; i < frame.data.length; i += 4) {
+            const currentBrightness = (frame.data[i] + frame.data[i+1] + frame.data[i+2]) / 3;
+            const lastBrightness = (lastFrame.data[i] + lastFrame.data[i+1] + lastFrame.data[i+2]) / 3;
+            diff += Math.abs(currentBrightness - lastBrightness);
+          }
+          const avgDiff = diff / (frame.data.length / 4);
+          if (avgDiff > 8) { // Weniger empfindlich als vorher (zuvor 3)
+            playAlarm();
+          }
+        }
+
+        lastFrame = frame;
+      }, 500); // Regelmäßige Prüfung alle 500ms
+    }
+  </script>
+</body>
+</html>
