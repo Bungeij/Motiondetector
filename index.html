@@ -75,7 +75,7 @@
             diff += Math.abs(currentBrightness - lastBrightness);
           }
           const avgDiff = diff / (frame.data.length / 4);
-          if (avgDiff > 15) {
+          if (avgDiff > 8) {
             playAlarm();
           }
         }
