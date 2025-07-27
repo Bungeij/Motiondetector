@@ -1,0 +1,90 @@
+
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Licht-/Bewegungsalarm</title>
+  <style>
+    body {
+      background: #000;
+      color: #0f0;
+      font-family: monospace;
+      text-align: center;
+      padding: 20px;
+    }
+    video {
+      display: none;
+    }
+    .status {
+      font-size: 1.5em;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <h1>🔦 Bewegungs- & Licht-Alarm</h1>
+  <p class="status">Starte...</p>
+  <video autoplay playsinline></video>
+  <audio id="alarm" src="https://freesound.org/data/previews/316/316847_4939433-lq.mp3" preload="auto"></audio>
+
+  <script>
+    const video = document.querySelector('video');
+    const status = document.querySelector('.status');
+    const alarm = document.getElementById('alarm');
+    let lastFrame = null;
+    let alarmPlaying = false;
+
+    async function initCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        video.srcObject = stream;
+        status.textContent = 'Überwachung aktiv...';
+        detectChanges();
+      } catch (err) {
+        status.textContent = 'Kamera-Zugriff verweigert';
+        console.error(err);
+      }
+    }
+
+    function playAlarm() {
+      if (!alarmPlaying) {
+        alarm.volume = 1.0;
+        alarm.loop = true;
+        alarm.play();
+        status.textContent = '⚠️ ALARM! Bewegung oder Licht erkannt!';
+        alarmPlaying = true;
+      }
+    }
+
+    function detectChanges() {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+
+      setInterval(() => {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+        if (lastFrame) {
+          let diff = 0;
+          for (let i = 0; i < frame.data.length; i += 4) {
+            const currentBrightness = (frame.data[i] + frame.data[i+1] + frame.data[i+2]) / 3;
+            const lastBrightness = (lastFrame.data[i] + lastFrame.data[i+1] + lastFrame.data[i+2]) / 3;
+            diff += Math.abs(currentBrightness - lastBrightness);
+          }
+          const avgDiff = diff / (frame.data.length / 4);
+          if (avgDiff > 15) {
+            playAlarm();
+          }
+        }
+
+        lastFrame = frame;
+      }, 1000);
+    }
+
+    initCamera();
+  </script>
+</body>
+</html>
