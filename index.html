@@ -1,0 +1,295 @@
+
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>🛡️ Dual-Kamera Überwachung</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', sans-serif;
+      background-color: #121212;
+      color: #00ff88;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+    }
+
+    h1 {
+      color: #00ffaa;
+      margin-bottom: 10px;
+      text-shadow: 0 0 5px #0f0;
+    }
+
+    label, select, input[type="checkbox"] {
+      font-size: 1em;
+      margin: 8px;
+      color: #00ffcc;
+    }
+
+    button {
+      padding: 10px 20px;
+      margin: 10px;
+      font-size: 1em;
+      border: none;
+      border-radius: 5px;
+      background: #00cc66;
+      color: #fff;
+      cursor: pointer;
+      box-shadow: 0 0 10px #00cc66;
+    }
+
+    button:hover {
+      background: #00ff88;
+      box-shadow: 0 0 15px #00ff88;
+    }
+
+    #stopBtn {
+      background: #cc0000;
+      box-shadow: 0 0 10px #cc0000;
+    }
+
+    #resetBtn {
+      background: #0044cc;
+      box-shadow: 0 0 10px #0044cc;
+    }
+
+    .video-wrapper {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      flex-wrap: wrap;
+      margin-top: 20px;
+    }
+
+    .video-container {
+      position: relative;
+    }
+
+    video {
+      width: 90vw;
+      max-width: 360px;
+      border: 2px solid #00ff88;
+      border-radius: 10px;
+      box-shadow: 0 0 15px #00ff88;
+    }
+
+    .indicator {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      width: 20px;
+      height: 20px;
+      background-color: red;
+      border-radius: 50%;
+      display: none;
+      box-shadow: 0 0 10px red;
+    }
+
+    .status {
+      font-size: 1.2em;
+      font-weight: bold;
+      margin-top: 20px;
+      color: #ffffff;
+    }
+  </style>
+</head>
+<body>
+  <h1>🔦 Dual-Überwachungssystem</h1>
+
+  <label for="rearCameraSelect">🎥 Rückkamera wählen:</label>
+  <select id="rearCameraSelect"></select>
+
+  <label>
+    <input type="checkbox" id="enableFrontCam" />
+    ➕ Frontkamera zur Licht-Erkennung aktivieren
+  </label>
+
+  <div>
+    <button id="startBtn">▶️ Überwachung starten</button>
+    <button id="stopBtn" style="display:none;">⏹️ Alarm stoppen</button>
+    <button id="resetBtn" style="display:none;">🔁 Reset</button>
+  </div>
+
+  <p class="status">Bereit...</p>
+
+  <div class="video-wrapper">
+    <div class="video-container">
+      <video id="rearVideo" autoplay muted playsinline></video>
+      <div class="indicator" id="indicatorRear"></div>
+    </div>
+    <div class="video-container">
+      <video id="frontVideo" autoplay muted playsinline></video>
+      <div class="indicator" id="indicatorFront"></div>
+    </div>
+  </div>
+
+  <script>
+    const rearVideo = document.getElementById('rearVideo');
+    const frontVideo = document.getElementById('frontVideo');
+    const rearCameraSelect = document.getElementById('rearCameraSelect');
+    const enableFrontCam = document.getElementById('enableFrontCam');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const status = document.querySelector('.status');
+    const indicatorRear = document.getElementById('indicatorRear');
+    const indicatorFront = document.getElementById('indicatorFront');
+
+    let rearStream = null, frontStream = null;
+    let detectionInterval = null, lightCheckInterval = null;
+    let alarmPlaying = false;
+    let calibratedFrame = null;
+    let audioCtx;
+
+    async function listCameras() {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter(d => d.kind === 'videoinput');
+      rearCameraSelect.innerHTML = '';
+      videoDevices.forEach(device => {
+        const option = document.createElement('option');
+        option.value = device.deviceId;
+        option.text = device.label || `Kamera ${rearCameraSelect.length + 1}`;
+        rearCameraSelect.appendChild(option);
+      });
+    }
+
+    async function startRearCamera(deviceId) {
+      if (rearStream) rearStream.getTracks().forEach(t => t.stop());
+      rearStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } });
+      rearVideo.srcObject = rearStream;
+    }
+
+    async function startFrontCamera() {
+      if (frontStream) frontStream.getTracks().forEach(t => t.stop());
+      frontStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+      frontVideo.srcObject = frontStream;
+    }
+
+    function calibrateRearCamera() {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = rearVideo.videoWidth;
+      canvas.height = rearVideo.videoHeight;
+      ctx.drawImage(rearVideo, 0, 0, canvas.width, canvas.height);
+      calibratedFrame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+      status.textContent = '🔍 Überwachung aktiv...';
+      indicatorRear.style.display = 'block';
+      detectMotion();
+    }
+
+    function detectMotion() {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+
+      detectionInterval = setInterval(() => {
+        canvas.width = rearVideo.videoWidth;
+        canvas.height = rearVideo.videoHeight;
+        ctx.drawImage(rearVideo, 0, 0, canvas.width, canvas.height);
+        const current = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        let diff = 0;
+
+        for (let i = 0; i < current.data.length; i += 4) {
+          const cb = (current.data[i] + current.data[i+1] + current.data[i+2]) / 3;
+          const rb = (calibratedFrame.data[i] + calibratedFrame.data[i+1] + calibratedFrame.data[i+2]) / 3;
+          diff += Math.abs(cb - rb);
+        }
+
+        const avgDiff = diff / (current.data.length / 4);
+        if (avgDiff > 4) triggerAlarm('rear');
+      }, 400);
+    }
+
+    function detectWhiteLightOnFront() {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+
+      lightCheckInterval = setInterval(() => {
+        canvas.width = frontVideo.videoWidth;
+        canvas.height = frontVideo.videoHeight;
+        ctx.drawImage(frontVideo, 0, 0, canvas.width, canvas.height);
+        const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+        let whitePixels = 0;
+        for (let i = 0; i < frame.data.length; i += 4) {
+          const r = frame.data[i];
+          const g = frame.data[i + 1];
+          const b = frame.data[i + 2];
+
+          if (r > 220 && g > 220 && b > 220) {
+            whitePixels++;
+          }
+        }
+
+        const whiteRatio = whitePixels / (frame.data.length / 4);
+        if (whiteRatio > 0.02) triggerAlarm('front'); // hohe Empfindlichkeit
+      }, 500);
+    }
+
+    function triggerAlarm(source) {
+      if (alarmPlaying) return;
+      alarmPlaying = true;
+
+      if (source === 'rear') indicatorRear.style.display = 'block';
+      if (source === 'front') indicatorFront.style.display = 'block';
+
+      status.textContent = `⚠️ Alarm durch ${source === 'rear' ? 'Bewegung' : 'Licht'}!`;
+      stopBtn.style.display = 'inline-block';
+      resetBtn.style.display = 'inline-block';
+
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      gain.gain.value = 0.25;
+      osc.frequency.setValueAtTime(900, audioCtx.currentTime);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 1);
+    }
+
+    function stopAlarm() {
+      if (audioCtx) audioCtx.close();
+      alarmPlaying = false;
+      status.textContent = '🛑 Alarm gestoppt.';
+    }
+
+    function resetSystem() {
+      stopAlarm();
+      indicatorRear.style.display = 'none';
+      indicatorFront.style.display = 'none';
+      stopBtn.style.display = 'none';
+      resetBtn.style.display = 'none';
+      status.textContent = '🔄 System wird zurückgesetzt...';
+      if (detectionInterval) clearInterval(detectionInterval);
+      if (lightCheckInterval) clearInterval(lightCheckInterval);
+      if (rearStream) rearStream.getTracks().forEach(t => t.stop());
+      if (frontStream) frontStream.getTracks().forEach(t => t.stop());
+      rearVideo.srcObject = null;
+      frontVideo.srcObject = null;
+      setTimeout(() => {
+        startBtn.style.display = 'inline-block';
+        status.textContent = 'Bereit...';
+      }, 1000);
+    }
+
+    startBtn.addEventListener('click', async () => {
+      startBtn.style.display = 'none';
+      await startRearCamera(rearCameraSelect.value);
+      if (enableFrontCam.checked) {
+        await startFrontCamera();
+        setTimeout(() => detectWhiteLightOnFront(), 2000);
+      }
+      setTimeout(() => calibrateRearCamera(), 2000);
+    });
+
+    stopBtn.addEventListener('click', stopAlarm);
+    resetBtn.addEventListener('click', resetSystem);
+
+    window.addEventListener('DOMContentLoaded', listCameras);
+  </script>
+</body>
+</html>
