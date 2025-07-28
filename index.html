@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Licht-/Bewegungsalarm</title>
+  <style>
+    body {
+      background: #000;
+      color: #0f0;
+      font-family: 'Courier New', monospace;
+      text-align: center;
+      padding: 20px;
+    }
+    .video-container {
+      position: relative;
+      display: inline-block;
+      margin-top: 20px;
+    }
+    video {
+      display: block;
+      width: 90vw;
+      max-width: 720px;
+      border: 3px solid #0f0;
+      border-radius: 10px;
+    }
+    .indicator {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      width: 20px;
+      height: 20px;
+      background-color: red;
+      border-radius: 50%;
+      display: none;
+      box-shadow: 0 0 10px red;
+    }
+    .status {
+      font-size: 1.6em;
+      margin-top: 20px;
+      font-weight: bold;
+    }
+    button {
+      font-size: 1.2em;
+      padding: 10px 20px;
+      margin: 10px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    #startBtn {
+      background: #0f0;
+      color: #000;
+    }
+    #startBtn:hover {
+      background: #4f4;
+    }
+    #stopBtn {
+      background: #f00;
+      color: #fff;
+      display: none;
+    }
+    #resetBtn {
+      background: #00f;
+      color: #fff;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>🚨 Tüta-Tüta Alarm</h1>
+  <button id="startBtn">▶️ Überwachung starten</button>
+  <button id="stopBtn">⏹️ Alarm stoppen</button>
+  <button id="resetBtn">🔁 Reset</button>
+  <p class="status">Bereit...</p>
+  <div class="video-container">
+    <video autoplay playsinline></video>
+    <div class="indicator" id="indicator"></div>
+  </div>
+
+  <script>
+    const video = document.querySelector('video');
+    const status = document.querySelector('.status');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const indicator = document.getElementById('indicator');
+
+    let alarmPlaying = false;
+    let calibratedFrame = null;
+    let detectionInterval = null;
+    let audioCtx, gain, playing = false;
+    let stream = null;
+
+    startBtn.addEventListener('click', () => {
+      startBtn.style.display = 'none';
+      initCamera();
+    });
+
+    stopBtn.addEventListener('click', stopAlarm);
+    resetBtn.addEventListener('click', resetSystem);
+
+    async function initCamera() {
+      try {
+        const constraints = {
+          video: {
+            facingMode: { exact: "environment" }
+          }
+        };
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+        status.textContent = '🎥 Kamera aktiv – Warte auf Start...';
+
+        setTimeout(() => {
+          calibrateScene();
+        }, 3000);
+      } catch (err) {
+        status.textContent = '❌ Kamera-Zugriff verweigert oder Rückkamera nicht verfügbar';
+        console.error(err);
+      }
+    }
+
+    function calibrateScene() {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      calibratedFrame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+      status.textContent = '🔍 Überwachung aktiv...';
+      indicator.style.display = 'block';
+      detectChanges(calibratedFrame);
+    }
+
+    function playTuetaAlarm() {
+      if (alarmPlaying || playing) return;
+
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      gain = audioCtx.createGain();
+      gain.gain.value = 0.3;
+      gain.connect(audioCtx.destination);
+
+      playing = true;
+
+      function playSequence(times = 3) {
+        if (!alarmPlaying || times <= 0) {
+          playing = false;
+          return;
+        }
+
+        const t = audioCtx.currentTime;
+        const freqs = [500, 700, 500];
+        freqs.forEach((freq, i) => {
+          const osc = audioCtx.createOscillator();
+          osc.frequency.setValueAtTime(freq, t + i * 0.3);
+          osc.connect(gain);
+          osc.start(t + i * 0.3);
+          osc.stop(t + i * 0.3 + 0.25);
+        });
+
+        setTimeout(() => playSequence(times - 1), 1000);
+      }
+
+      playSequence(1000); // Repeat for a long time
+    }
+
+    function playAlarm() {
+      if (!alarmPlaying) {
+        alarmPlaying = true;
+        playTuetaAlarm();
+        status.textContent = '🚨 Tüta-Tüta! Bewegung erkannt!';
+        stopBtn.style.display = 'inline-block';
+        resetBtn.style.display = 'inline-block';
+      }
+    }
+
+    function stopAlarm() {
+      if (audioCtx) {
+        audioCtx.close();
+      }
+      alarmPlaying = false;
+      playing = false;
+      status.textContent = '🛑 Alarm gestoppt.';
+    }
+
+    function resetSystem() {
+      stopAlarm();
+      indicator.style.display = 'none';
+      stopBtn.style.display = 'none';
+      resetBtn.style.display = 'none';
+      status.textContent = '🔄 System zurückgesetzt. Starte neu...';
+      calibratedFrame = null;
+      if (detectionInterval) clearInterval(detectionInterval);
+      if (stream) {
+        const tracks = stream.getTracks();
+        tracks.forEach(track => track.stop());
+      }
+      video.srcObject = null;
+      setTimeout(() => {
+        startBtn.style.display = 'inline-block';
+        status.textContent = 'Bereit...';
+      }, 1000);
+    }
+
+    function detectChanges(referenceFrame) {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+
+      detectionInterval = setInterval(() => {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+        if (referenceFrame) {
+          let diff = 0;
+          for (let i = 0; i < frame.data.length; i += 4) {
+            const currentBrightness = (frame.data[i] + frame.data[i+1] + frame.data[i+2]) / 3;
+            const refBrightness = (referenceFrame.data[i] + referenceFrame.data[i+1] + referenceFrame.data[i+2]) / 3;
+            diff += Math.abs(currentBrightness - refBrightness);
+          }
+          const avgDiff = diff / (frame.data.length / 4);
+          if (avgDiff > 6) {
+            playAlarm();
+          }
+        }
+      }, 500);
+    }
+  </script>
+</body>
+</html>
