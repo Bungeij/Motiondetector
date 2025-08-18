@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Nacht-Wächter – BackCam Pro HUD</title>
+<style>
+  :root{
+    --bg:#0b0e12; --panel:#12161c; --text:#d8dee9; --muted:#7a8899;
+    --accent:#4fb3ff; --accent2:#67ffd1; --danger:#ff4d4d; --border:#2a3444;
+  }
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{display:flex;gap:12px;box-sizing:border-box;height:100vh;padding:10px}
+  .left{flex:3;display:flex;flex-direction:column;gap:10px;min-width:60vw}
+  .right{flex:2;display:flex;flex-direction:column;gap:12px}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:12px;box-shadow:0 0 0 1px #0d131a inset}
+  h1{margin:0 0 8px 0;font-size:16px;color:#c6d4f0}
+  .bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  button, input[type="range"]{background:#0f141b;color:var(--text);border:1px solid var(--border);border-radius:10px;padding:9px 12px;font-size:14px}
+  button{cursor:pointer}
+  video{width:100%;height:calc(100vh - 180px);object-fit:cover;border-radius:14px;background:#000;transition:box-shadow .15s ease}
+  .videoWrap{position:relative;border-radius:16px;overflow:hidden}
+  .hud{position:absolute;left:10px;bottom:10px;background:rgba(0,0,0,.35);backdrop-filter:blur(4px);
+       border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:6px 8px;font-size:12px}
+  .meter{height:10px;background:#0d1218;border:1px solid var(--border);border-radius:999px;position:relative;overflow:hidden}
+  .meter>span{position:absolute;left:0;top:0;bottom:0;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2))}
+  .status{padding:10px;border-radius:10px;background:#0d141b;border:1px dashed var(--border);min-height:42px}
+  .pill{padding:6px 8px;border-radius:999px;border:1px solid var(--border);background:#0f141b;color:#c7d7ee;font-size:12px}
+  .hint{font-size:12px;color:var(--muted);line-height:1.45}
+  .list{max-height:34vh;overflow:auto;font-size:12px;border:1px solid var(--border);border-radius:10px;padding:6px;background:#0f141b}
+  .list-item{display:flex;justify-content:space-between;gap:8px;padding:6px 4px;border-bottom:1px dashed #1f2836}
+  .list-item:last-child{border-bottom:none}
+  .small{font-size:12px;color:var(--muted)}
+  canvas#trend{width:100%;height:110px;background:#0f141b;border:1px solid var(--border);border-radius:10px}
+  /* Alarm-Visual: roter pulsierender Rand */
+  .alarm video{box-shadow:0 0 0 3px rgba(255,77,77,.9), 0 0 28px 8px rgba(255,77,77,.35)}
+  .alarmPulse{position:absolute;inset:0;border:2px solid var(--danger);border-radius:16px;pointer-events:none;
+              animation:pulse 0.8s ease-in-out infinite}
+  @keyframes pulse{ 0%{opacity:.15} 50%{opacity:.6} 100%{opacity:.15} }
+  @media (orientation:portrait){ video{height:42vh} .list{max-height:22vh} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="left">
+    <div class="panel bar" style="justify-content:space-between">
+      <div class="bar">
+        <span class="pill" id="camLabel">Kamera: –</span>
+        <span class="pill" id="fpsLabel">0 FPS</span>
+        <span class="pill" id="cooldownLabel">Cooldown: 0s</span>
+        <span class="pill" id="alarmLabel">Alarm: AUS</span>
+      </div>
+      <div class="bar">
+        <button id="startBtn">Kamera starten</button>
+        <button id="resetBtn">Reset</button>
+        <button id="alarmTestBtn">Alarm-Test</button>
+      </div>
+    </div>
+
+    <div class="videoWrap" id="videoWrap">
+      <video id="video" autoplay playsinline muted></video>
+      <div class="hud" id="hudText">Bereit</div>
+      <div class="alarmPulse" id="alarmPulse" style="display:none"></div>
+    </div>
+  </div>
+
+  <div class="right">
+    <div class="panel">
+      <h1>Erkennung & Einstellungen</h1>
+      <div class="bar">
+        <div style="flex:1">
+          <div class="small">Bewegung gesamt: <span id="motionPctTxt">0%</span></div>
+          <div class="meter"><span id="motionPct"></span></div>
+        </div>
+        <div style="flex:1">
+          <div class="small">Zentrum-Dominanz: <span id="centerDomTxt">0%</span></div>
+          <div class="meter"><span id="centerDom"></span></div>
+        </div>
+      </div>
+      <div class="bar" style="margin-top:8px">
+        <label class="small" style="flex:1">Empfindlichkeit
+          <input id="sens" type="range" min="10" max="95" value="75" />
+        </label>
+        <label class="small" style="flex:1">Mindest-Bewegung
+          <input id="minMotion" type="range" min="1" max="20" value="4" />
+        </label>
+      </div>
+      <div style="margin-top:10px">
+        <canvas id="trend" width="480" height="110"></canvas>
+      </div>
+      <div class="status" id="statusBox">Status: <strong>Bereit</strong></div>
+    </div>
+
+    <div class="panel">
+      <h1>Ereignis-Log</h1>
+      <div class="list" id="logList"></div>
+      <div class="small">Max. 20 Einträge · Zeiten lokal</div>
+    </div>
+
+    <div class="panel hint">
+      Optimiert für Querformat. Funktioniert am besten über HTTPS in Safari/Chrome (iOS 15+). 
+      Ton benötigt eine einmalige Nutzer-Interaktion. In sehr dunkler Umgebung ggf. Empfindlichkeit anpassen.
+    </div>
+  </div>
+</div>
+
+<canvas id="work" width="640" height="360" hidden></canvas>
+<script>
+const video = document.getElementById('video');
+const work = document.getElementById('work');
+const wctx = work.getContext('2d', { willReadFrequently: true });
+
+const startBtn = document.getElementById('startBtn');
+const resetBtn = document.getElementById('resetBtn');
+const alarmTestBtn = document.getElementById('alarmTestBtn');
+
+const motionPctBar = document.getElementById('motionPct');
+const centerDomBar = document.getElementById('centerDom');
+const motionPctTxt = document.getElementById('motionPctTxt');
+const centerDomTxt = document.getElementById('centerDomTxt');
+
+const camLabel = document.getElementById('camLabel');
+const fpsLabel = document.getElementById('fpsLabel');
+const cooldownLabel = document.getElementById('cooldownLabel');
+const alarmLabel = document.getElementById('alarmLabel');
+const statusBox = document.getElementById('statusBox');
+const hudText = document.getElementById('hudText');
+const alarmPulse = document.getElementById('alarmPulse');
+const videoWrap = document.getElementById('videoWrap');
+
+const sens = document.getElementById('sens');
+const minMotion = document.getElementById('minMotion');
+
+const logList = document.getElementById('logList');
+const trendCanvas = document.getElementById('trend');
+const tctx = trendCanvas.getContext('2d');
+
+let mediaStream = null;
+let prev = null;
+let lastTimes = [];
+let trendBuffer = [];
+let alarmOn = false;
+let audio = null;
+let audioReady = false;
+let lastAlarm = 0; // ms
+const ALARM_COOLDOWN_MS = 6000;
+const ALARM_LEN_MS = 6000;
+
+// ===== Utilities =====
+function setStatus(text){ statusBox.innerHTML = 'Status: <strong>'+text+'</strong>'; hudText.textContent = text; }
+function nowStr(){
+  const d=new Date();
+  return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+function addLog(text){
+  const item = document.createElement('div');
+  item.className = 'list-item';
+  const ts = document.createElement('span'); ts.textContent = nowStr(); ts.style.opacity=.8;
+  const msg = document.createElement('span'); msg.textContent = text;
+  item.appendChild(ts); item.appendChild(msg);
+  logList.prepend(item);
+  while(logList.children.length>20){ logList.removeChild(logList.lastChild); }
+}
+
+// ===== Audio / Alarm =====
+async function startAudio() {
+  if(audioReady) return;
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const osc = ctx.createOscillator(); osc.type = 'sawtooth';
+  const lfo = ctx.createOscillator(); lfo.type = 'square'; lfo.frequency.value = 7;
+  const gain = ctx.createGain(); gain.gain.value = 0.0;
+  const lfoGain = ctx.createGain(); lfoGain.gain.value = 520;
+  lfo.connect(lfoGain).connect(osc.frequency);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(); lfo.start();
+  audio = {ctx,osc,gain}; audioReady = true;
+}
+
+function setAlarm(state){
+  alarmOn = state;
+  alarmLabel.textContent = 'Alarm: ' + (alarmOn ? 'AN' : 'AUS');
+  alarmPulse.style.display = alarmOn ? 'block' : 'none';
+  videoWrap.classList.toggle('alarm', alarmOn);
+}
+
+function triggerAlarm(intensity){
+  const now = performance.now();
+  const elapsed = now - lastAlarm;
+  const remain = Math.max(0, ALARM_COOLDOWN_MS - elapsed);
+  if(remain>0) return; // cooldown aktiv
+  lastAlarm = now;
+  setAlarm(true);
+  addLog('ALARM – Intensität: ' + intensity.toFixed(1));
+  if(!audioReady) return;
+  // Laut aufziehen, 6s halten, dann abklingen
+  audio.gain.gain.setTargetAtTime(0.75, audio.ctx.currentTime, 0.05);
+  setTimeout(()=>{
+    audio.gain.gain.setTargetAtTime(0.0, audio.ctx.currentTime, 0.2);
+    setAlarm(false);
+  }, ALARM_LEN_MS);
+}
+
+// ===== Camera =====
+async function startCamera(){
+  try{
+    if(mediaStream){ mediaStream.getTracks().forEach(t=>t.stop()); }
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio:false, video:{ facingMode: { exact:'environment' }, width:{ideal:1280}, height:{ideal:720} }
+    });
+  }catch(e){
+    // Fallback: falls environment exakte Anforderung fehlschlägt, versuche "environment" ohne exact
+    try{
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio:false, video:{ facingMode:'environment', width:{ideal:1280}, height:{ideal:720} }
+      });
+    }catch(e2){
+      // Letzter Fallback: user (Front)
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio:false, video:{ facingMode:'user', width:{ideal:1280}, height:{ideal:720} }
+      });
+    }
+  }
+  const settings = mediaStream.getVideoTracks()[0].getSettings?.() || {};
+  camLabel.textContent = 'Kamera: ' + (settings.facingMode || 'unbekannt');
+  video.srcObject = mediaStream;
+  await video.play();
+  work.width = 640;
+  work.height = Math.floor(640 * (video.videoHeight || 360) / (video.videoWidth || 640));
+  prev = null;
+  setStatus('Kamera läuft');
+  loop();
+}
+
+// ===== Vision / Heuristik =====
+function diffFrame(){
+  if(video.readyState<2) return {motion:0, center:0, brightness:0};
+  wctx.drawImage(video, 0, 0, work.width, work.height);
+  const curr = wctx.getImageData(0, 0, work.width, work.height);
+  if(!prev){ prev = curr; return {motion:0, center:0, brightness:0}; }
+  const p = prev.data, c = curr.data;
+  let motion = 0, center = 0, brightness = 0;
+  const cx0 = Math.floor(work.width*0.28), cx1 = Math.floor(work.width*0.72);
+  const cy0 = Math.floor(work.height*0.28), cy1 = Math.floor(work.height*0.72);
+  for(let i=0;i<c.length;i+=4){
+    const y = Math.floor((i/4)/work.width);
+    const x = (i/4)%work.width;
+    const pr = p[i], pg = p[i+1], pb = p[i+2];
+    const cr = c[i], cg = c[i+1], cb = c[i+2];
+    const pd = (pr+pg+pb)/3, cd = (cr+cg+cb)/3;
+    const d = Math.abs(cd - pd);
+    if (d > 14) { // sehr empfindlich
+      motion++;
+      if(x>cx0 && x<cx1 && y>cy0 && y<cy1) center++;
+    }
+    brightness += cd;
+  }
+  prev = curr;
+  const total = work.width*work.height;
+  return {
+    motion: (motion/total)*100,
+    center: total? (center/Math.max(1,motion))*100 : 0,
+    brightness: brightness/(total*255)
+  };
+}
+
+function updateMeters(motionPct, centerDom){
+  const m = Math.min(100, motionPct);
+  const c = Math.min(100, centerDom);
+  motionPctBar.style.width = m + '%';
+  centerDomBar.style.width = c + '%';
+  motionPctTxt.textContent = m.toFixed(1) + '%';
+  centerDomTxt.textContent = c.toFixed(1) + '%';
+}
+
+function drawTrend(){
+  // Einfaches Linien-Chart (kein externes Lib)
+  tctx.clearRect(0,0,trendCanvas.width, trendCanvas.height);
+  tctx.lineWidth = 1.5;
+  tctx.beginPath();
+  const pad = 8;
+  const w = trendCanvas.width - pad*2;
+  const h = trendCanvas.height - pad*2;
+  const max = Math.max(30, ...trendBuffer);
+  trendBuffer.forEach((v,i)=>{
+    const x = pad + (i/(Math.max(1,trendBuffer.length-1)))*w;
+    const y = pad + h - (v/max)*h;
+    if(i===0) tctx.moveTo(x,y); else tctx.lineTo(x,y);
+  });
+  tctx.strokeStyle = "#9dd6ff";
+  tctx.stroke();
+}
+
+function shouldTrigger(motionPct, centerDom, brightness){
+  // aggressiver, aber mit Trend
+  const minM = parseInt(minMotion.value,10);
+  const sensitivity = parseInt(sens.value,10); // 10..95
+  const centerWeight = (centerDom/100);
+  const score = (motionPct * (0.9 + 0.8*centerWeight)) + (brightness*16);
+  trendBuffer.push(score);
+  if(trendBuffer.length>90) trendBuffer.shift(); // ~90 Frames Historie
+  drawTrend();
+  const haveTrend = trendBuffer.length>10;
+  const trend = haveTrend ? (trendBuffer[trendBuffer.length-1] - trendBuffer[Math.max(0,trendBuffer.length-15)]) : 0;
+  // Schwelle sinkt mit höherer Sensitivität
+  const threshold = 18 + (38 - (sensitivity/95)*38); // 18..56 -> bei hoher Sens geringer
+  return (motionPct > minM) && (centerDom>38) && ((score + trend*0.6) > threshold);
+}
+
+// ===== Main loop =====
+function loop(){
+  const t0 = performance.now();
+  const {motion, center, brightness} = diffFrame();
+  updateMeters(motion, center);
+
+  // Cooldown-Anzeige
+  const remain = Math.max(0, ALARM_COOLDOWN_MS - (performance.now() - lastAlarm));
+  cooldownLabel.textContent = 'Cooldown: ' + Math.ceil(remain/1000) + 's';
+
+  if(shouldTrigger(motion, center, brightness)){
+    setStatus('Annäherung erkannt – ALARM!');
+    triggerAlarm(motion*(1+center/100));
+  }else if(!alarmOn){
+    setStatus('Überwachung läuft …');
+  }
+
+  // FPS
+  const t1 = performance.now();
+  lastTimes.push(t1); while(lastTimes.length>20) lastTimes.shift();
+  if(lastTimes.length>1){
+    const dt = (lastTimes[lastTimes.length-1]-lastTimes[0])/ (lastTimes.length-1);
+    const fps = 1000/dt;
+    fpsLabel.textContent = fps.toFixed(0)+' FPS';
+  }
+  requestAnimationFrame(loop);
+}
+
+// ===== UI =====
+startBtn.addEventListener('click', async ()=>{
+  await startAudio();
+  await startCamera();
+});
+
+resetBtn.addEventListener('click', ()=>{
+  trendBuffer = [];
+  lastAlarm = 0;
+  setAlarm(false);
+  addLog('Reset');
+  setStatus('Zurückgesetzt');
+});
+
+alarmTestBtn.addEventListener('click', async ()=>{
+  await startAudio();
+  triggerAlarm(99);
+});
+
+// Screen wake best effort
+if ('wakeLock' in navigator && navigator.wakeLock.request) {
+  navigator.wakeLock.request('screen').catch(()=>{});
+}
+document.addEventListener('visibilitychange', ()=>{
+  if(document.hidden){ setAlarm(false); }
+});
+</script>
+</body>
+</html>
