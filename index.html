@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Nacht-Wächter – Dual HUD Autoalarm</title>
+<style>
+  body{margin:0;background:#0b0e12;color:#d8dee9;font-family:sans-serif;}
+  .wrap{display:flex;flex-direction:row;height:100vh;gap:10px;padding:10px;box-sizing:border-box;}
+  .left{flex:2;display:flex;flex-direction:column;gap:8px;}
+  .right{flex:1;display:flex;flex-direction:column;gap:12px;}
+  video{width:100%;height:45vh;object-fit:cover;border-radius:10px;background:#000;}
+  .panel{background:#12161c;border:1px solid #2a3444;border-radius:10px;padding:10px;font-size:14px;}
+  h1{margin:0 0 8px;font-size:16px;color:#c6d4f0;}
+  .meter{height:10px;background:#0d1218;border:1px solid #2a3444;border-radius:999px;position:relative}
+  .meter span{position:absolute;top:0;left:0;bottom:0;width:0;background:linear-gradient(90deg,#4fb3ff,#67ffd1);}
+  .bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  button{padding:8px 12px;border-radius:8px;border:1px solid #2a3444;background:#13304a;color:#fff;font-size:14px;cursor:pointer;}
+  .status{padding:8px;border-radius:8px;background:#0d141b;border:1px dashed #2a3444;margin-top:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="left">
+    <video id="videoBack" autoplay playsinline muted></video>
+    <video id="videoFront" autoplay playsinline muted></video>
+  </div>
+  <div class="right">
+    <div class="panel">
+      <h1>Überwachung</h1>
+      <div class="bar">
+        <button id="startBtn">Kameras starten</button>
+        <button id="resetBtn">Reset</button>
+        <button id="alarmTestBtn">Alarm-Test</button>
+      </div>
+      <div style="margin-top:8px">Bewegung: <span id="motionTxt">0%</span></div>
+      <div class="meter"><span id="motionBar"></span></div>
+      <div style="margin-top:8px">Zentrum: <span id="centerTxt">0%</span></div>
+      <div class="meter"><span id="centerBar"></span></div>
+      <div class="status" id="statusBox">Status: Bereit</div>
+    </div>
+  </div>
+</div>
+
+<canvas id="workBack" width="320" height="180" hidden></canvas>
+<canvas id="workFront" width="320" height="180" hidden></canvas>
+<script>
+const videoBack=document.getElementById('videoBack');
+const videoFront=document.getElementById('videoFront');
+const workBack=document.getElementById('workBack'), ctxBack=workBack.getContext('2d',{willReadFrequently:true});
+const workFront=document.getElementById('workFront'), ctxFront=workFront.getContext('2d',{willReadFrequently:true});
+
+const motionBar=document.getElementById('motionBar'),centerBar=document.getElementById('centerBar');
+const motionTxt=document.getElementById('motionTxt'),centerTxt=document.getElementById('centerTxt');
+const statusBox=document.getElementById('statusBox');
+
+let prevBack=null,prevFront=null;
+let audio=null,audioReady=false,alarmOn=false,lastAlarm=0;
+
+async function startAudio(){
+  if(audioReady) return;
+  const ctx=new (window.AudioContext||window.webkitAudioContext)();
+  const osc=ctx.createOscillator(); osc.type="sawtooth";
+  const lfo=ctx.createOscillator(); lfo.type="square"; lfo.frequency.value=7;
+  const gain=ctx.createGain(); gain.gain.value=0;
+  const lfoGain=ctx.createGain(); lfoGain.gain.value=500;
+  lfo.connect(lfoGain).connect(osc.frequency);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(); lfo.start();
+  audio={ctx,osc,gain}; audioReady=true;
+}
+function triggerAlarm(){
+  const now=performance.now();
+  if(now-lastAlarm<6000) return;
+  lastAlarm=now;
+  if(!audioReady) return;
+  alarmOn=true;
+  audio.gain.gain.setTargetAtTime(0.7,audio.ctx.currentTime,0.05);
+  setTimeout(()=>{
+    audio.gain.gain.setTargetAtTime(0.0,audio.ctx.currentTime,0.2);
+    alarmOn=false;
+  },6000);
+}
+function diffFrame(video,ctx,prev){
+  if(video.readyState<2) return {curr:prev,motion:0,center:0,bright:0};
+  ctx.drawImage(video,0,0,ctx.canvas.width,ctx.canvas.height);
+  const curr=ctx.getImageData(0,0,ctx.canvas.width,ctx.canvas.height);
+  if(!prev) return {curr,motion:0,center:0,bright:0};
+  let motion=0,center=0,bright=0;
+  const w=ctx.canvas.width,h=ctx.canvas.height;
+  const cx0=w*0.3,cx1=w*0.7,cy0=h*0.3,cy1=h*0.7;
+  const p=prev.data,c=curr.data;
+  for(let i=0;i<c.length;i+=4){
+    const y=Math.floor((i/4)/w),x=(i/4)%w;
+    const pd=(p[i]+p[i+1]+p[i+2])/3;
+    const cd=(c[i]+c[i+1]+c[i+2])/3;
+    const d=Math.abs(cd-pd);
+    if(d>15){motion++; if(x>cx0&&x<cx1&&y>cy0&&y<cy1) center++;}
+    bright+=cd;
+  }
+  const total=w*h;
+  return {curr,motion:(motion/total)*100,center:(motion?center/motion*100:0),bright:bright/(total*255)};
+}
+function updateHUD(m,c){
+  const mm=Math.min(100,m),cc=Math.min(100,c);
+  motionBar.style.width=mm+"%"; centerBar.style.width=cc+"%";
+  motionTxt.textContent=mm.toFixed(1)+"%"; centerTxt.textContent=cc.toFixed(1)+"%";
+}
+function checkTrigger(res){
+  if(res.motion>2 && res.center>35 && (res.motion*1.8+res.bright*20)>20){
+    statusBox.textContent="Status: Annäherung erkannt!";
+    triggerAlarm();
+  }else if(!alarmOn){
+    statusBox.textContent="Status: Überwachung läuft …";
+  }
+}
+async function startCams(){
+  try{
+    // Erst Rückkamera versuchen
+    const back=await navigator.mediaDevices.getUserMedia({video:{facingMode:{exact:"environment"}},audio:false});
+    videoBack.srcObject=back;
+  }catch(e){
+    console.warn("Rückkamera nicht verfügbar, fallback auf Front:",e);
+  }
+  try{
+    const front=await navigator.mediaDevices.getUserMedia({video:{facingMode:"user"},audio:false});
+    videoFront.srcObject=front;
+  }catch(e){
+    console.warn("Frontkamera nicht verfügbar:",e);
+  }
+  loop();
+}
+function loop(){
+  const resB=diffFrame(videoBack,ctxBack,prevBack); prevBack=resB.curr;
+  const resF=diffFrame(videoFront,ctxFront,prevFront); prevFront=resF.curr;
+  // Kombiniere: Priorität Rückkamera, wenn vorhanden
+  const res = resB.motion>0?resB:resF;
+  updateHUD(res.motion,res.center);
+  checkTrigger(res);
+  requestAnimationFrame(loop);
+}
+document.getElementById('startBtn').addEventListener('click',async()=>{await startAudio(); await startCams();});
+document.getElementById('resetBtn').addEventListener('click',()=>{lastAlarm=0;alarmOn=false;if(audioReady)audio.gain.gain.value=0;statusBox.textContent="Status: Reset";});
+document.getElementById('alarmTestBtn').addEventListener('click',()=>{triggerAlarm();});
+</script>
+</body>
+</html>
